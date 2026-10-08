@@ -64,3 +64,27 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Send APK to Telegram Channel
+        if: always() && steps.prepare_artifacts.outputs.apk_name != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram credentials not set. Skipping."
+            exit 0
+          fi
+          
+          APK_FILE="release-artifacts/${{ steps.prepare_artifacts.outputs.apk_name }}"
+          TAG="${{ steps.prepare_artifacts.outputs.tag_name }}"
+          
+          CAPTION="🚀 <b>Secure Call Recorder ${TAG}</b>"$'\n\n'"📱 <b>Yangi versiya muvaffaqiyatli yig'ildi!</b>"$'\n'"🔒 100% Offline, Maxfiy audio ombori"$'\n\n'"🔗 <a href='https://github.com/${{ github.repository }}/releases/tag/${TAG}'>GitHub Releases</a>"
+          
+          echo "Uploading ${APK_FILE} to Telegram..."
+          curl -s -F chat_id="${TELEGRAM_CHAT_ID}" \
+               -F document=@"${APK_FILE}" \
+               -F caption="${CAPTION}" \
+               -F parse_mode="HTML" \
+               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument"
+          echo "Telegram upload completed."
