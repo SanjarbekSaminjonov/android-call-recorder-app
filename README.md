@@ -1,6 +1,6 @@
 # Secure Call Recorder 🎙️🔒
 
-A **100% offline, privacy-first call recording application** engineered specifically for modern Android versions (**Android 15–17 / API 35–37**) and **Samsung One UI 7–9** (Snapdragon SM-S9420 / Galaxy S24+ and modern Galaxy devices).
+A **100% offline, privacy-first call recording application** engineered for modern Android versions (**Android 11–17 / API 30–37**) across all major devices (**Xiaomi / Poco / Redmi MIUI & HyperOS**, **Samsung One UI**, **Google Pixel**, **OnePlus**, and more).
 
 ---
 
@@ -10,11 +10,11 @@ A **100% offline, privacy-first call recording application** engineered specific
   The `android.permission.INTERNET` permission is completely stripped from `AndroidManifest.xml`. The app cannot communicate with any remote servers, analytics, crash reporters, or external APIs. All data stays strictly on your physical device.
 - **⚡ Dual Capture Engine:**
   1. **Enhanced Mode (Dual-Side Audio via Shizuku):** Elevates audio capture privileges to UID 2000 (`com.android.shell`) to bypass Google's modern call recording restrictions and directly tap internal audio streams for crystal-clear caller and receiver audio.
-  2. **Standard Mode (Hardware-Aware Native Fallback):** For users without Shizuku, the app automatically switches to an optimized microphone recorder supporting Bluetooth SCO (Galaxy Buds), wired headsets, and USB-C headsets without requiring terminal commands.
+  2. **Standard Mode (Hardware-Aware Native Fallback):** For users without Shizuku, the app automatically switches to an optimized microphone recorder supporting Bluetooth SCO (wireless buds), wired headsets, and USB-C headsets out-of-the-box.
 - **🔐 Sandboxed Vault (`.pvr`):**
-  Recordings are stored inside the app's internal sandbox (`/data/user/0/uz.developer.privaterecorder/files/secure_vault/`). File managers (Samsung My Files, Google Files) and media indexers cannot scan or play these files. Data is safeguarded with custom obfuscation headers and XOR masking.
-- **🔋 Samsung One UI Deep Sleep & WakeLock Guard:**
-  Integrates a selective `PARTIAL_WAKE_LOCK` and persistent standby Foreground Service (`microphone|phoneCall|specialUse`). When you place the phone to your ear and the proximity sensor turns off the screen, One UI is prevented from throttling the CPU or dropping audio buffer frames. WakeLocks are immediately released the moment the call ends.
+  Recordings are stored inside the app's internal sandbox (`/data/user/0/uz.developer.privaterecorder/files/secure_vault/`). File managers (Xiaomi File Manager, Google Files, Samsung My Files) and media indexers cannot scan or play these files. Data is safeguarded with custom obfuscation headers and XOR masking.
+- **🔋 Universal Deep Sleep & WakeLock Guard:**
+  Integrates a selective `PARTIAL_WAKE_LOCK` and persistent standby Foreground Service (`specialUse|microphone`). When you place the phone to your ear and the proximity sensor turns off the screen, aggressive OEM battery savers (MIUI/HyperOS, One UI, etc.) are prevented from throttling the CPU or dropping audio buffer frames. WakeLocks are immediately released the moment the call ends.
 - **👆 Biometric & PIN Security:**
   Protects all call archives with Android's native `BiometricPrompt` (Fingerprint, Face Unlock, or Device Lock PIN).
 - **🔄 Sudden Reboot & Crash Recovery:**
@@ -91,9 +91,9 @@ REC_20261008_143015_John_Doe_+998901234567.pvr
 
 ---
 
-## 💡 Samsung One UI Optimization & Notification Setup
+## 💡 Background Stability & Status Bar Notification Setup
 
-Android 14–17 mandates an active notification for Foreground Services using the `microphone` type. If you block the application's notifications globally, Android or Samsung One UI may terminate the recording service.
+Android mandates an active notification for Foreground Services. If you block the application's notifications globally, Android or OEM battery managers (Xiaomi/Poco MIUI, HyperOS, Samsung One UI) may terminate the recording service.
 
 The app uses **two independent notification channels**:
 1. `channel_standby_monitoring` (Low priority / Silent standby)
@@ -111,7 +111,7 @@ The app uses **two independent notification channels**:
 ## 📱 Application Screens
 
 - **🎙️ Recordings Screen:** Audio player with speed controls, waveforms, volume boost, sorting dropdown, starred filter, search bar, and WAV export.
-- **⚡ System & Permissions:** Visual dashboard showing Shizuku status, telephony & contact permissions, and Samsung battery optimization status.
+- **⚡ System & Permissions:** Visual dashboard showing core permissions, optional Shizuku status, and system battery optimization status.
 - **🧹 Storage Cleanup:** Storage usage analysis, auto-retention policy selection (30, 60, 90, 180 days), and manual bulk cleanup.
 - **🔒 Security & Lock:** Biometric fingerprint/face unlock and device PIN protection toggles.
 - **📖 How It Works (Docs):** Interactive documentation with quick-access shortcuts to Samsung notification settings.

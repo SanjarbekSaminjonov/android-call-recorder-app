@@ -538,16 +538,21 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun requestShizukuPermission() {
-        if (!Shizuku.pingBinder()) {
-            Toast.makeText(this, "Shizuku service is not running!", Toast.LENGTH_SHORT).show()
-            Log.e(TAG, "[UI] Shizuku pingBinder failed.")
-            return
-        }
-        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Shizuku permission already granted", Toast.LENGTH_SHORT).show()
-        } else {
-            Log.i(TAG, "[UI] Requesting Shizuku permission...")
-            Shizuku.requestPermission(SHIZUKU_PERMISSION_CODE)
+        try {
+            if (!Shizuku.pingBinder()) {
+                Toast.makeText(this, "Shizuku is not running. Standard Mode (Mic) is active!", Toast.LENGTH_LONG).show()
+                Log.i(TAG, "[UI] Shizuku pingBinder failed. Running in standard mic fallback.")
+                return
+            }
+            if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Shizuku permission already granted", Toast.LENGTH_SHORT).show()
+            } else {
+                Log.i(TAG, "[UI] Requesting Shizuku permission...")
+                Shizuku.requestPermission(SHIZUKU_PERMISSION_CODE)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Standard Mode is active.", Toast.LENGTH_SHORT).show()
+            Log.w(TAG, "[UI] Shizuku request warning: ${e.message}")
         }
     }
 
@@ -687,6 +692,7 @@ fun SecureRecorderAppRoot(
     var isShizukuAvailable by remember { mutableStateOf(false) }
     var isShizukuGranted by remember { mutableStateOf(false) }
     var hasSystemPermissions by remember { mutableStateOf(false) }
+    var hasContactsPermission by remember { mutableStateOf(false) }
     var isBatteryOptimizedIgnored by remember { mutableStateOf(false) }
     var isServiceRunning by remember { mutableStateOf(RecorderControllerService.isServiceRunning) }
 
@@ -806,7 +812,8 @@ fun SecureRecorderAppRoot(
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         } else true
 
-        hasSystemPermissions = phoneState && recordAudio && postNotifications && readContacts
+        hasContactsPermission = readContacts
+        hasSystemPermissions = phoneState && recordAudio && postNotifications
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val pm = context.getSystemService(PowerManager::class.java)
@@ -1544,6 +1551,7 @@ fun SecureRecorderAppRoot(
                             isShizukuAvailable = isShizukuAvailable,
                             isShizukuGranted = isShizukuGranted,
                             hasSystemPermissions = hasSystemPermissions,
+                            hasContactsPermission = hasContactsPermission,
                             isBatteryOptimizedIgnored = isBatteryOptimizedIgnored,
                             onRequestShizuku = onRequestShizuku,
                             onRequestPermissions = {
@@ -2225,6 +2233,7 @@ fun SystemPermissionsPage(
     isShizukuAvailable: Boolean,
     isShizukuGranted: Boolean,
     hasSystemPermissions: Boolean,
+    hasContactsPermission: Boolean,
     isBatteryOptimizedIgnored: Boolean,
     onRequestShizuku: () -> Unit,
     onRequestPermissions: () -> Unit,
@@ -2248,29 +2257,36 @@ fun SystemPermissionsPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Mic, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text("Required System Permissions", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Core Recording Permissions", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Microphone (RECORD_AUDIO), Phone State (READ_PHONE_STATE), Call Log and Contacts. Required for detecting calls and standard recording.",
+                    text = "Microphone (RECORD_AUDIO) and Phone State (READ_PHONE_STATE). Essential for detecting and capturing phone calls.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StatusItem(
-                    title = "Status",
+                    title = "Recording Engine",
                     isOk = hasSystemPermissions,
-                    okText = "All Granted",
-                    errorText = "Missing Permissions"
+                    okText = "Active & Ready",
+                    errorText = "Missing Core Permissions"
                 )
-                if (!hasSystemPermissions) {
+                Spacer(modifier = Modifier.height(6.dp))
+                StatusItem(
+                    title = "Caller Name Resolution",
+                    isOk = hasContactsPermission,
+                    okText = "Contacts Granted",
+                    errorText = "Optional (Number Only)"
+                )
+                if (!hasSystemPermissions || !hasContactsPermission) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = onRequestPermissions,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Grant System Permissions")
+                        Text(if (!hasSystemPermissions) "Grant Core Permissions" else "Allow Contacts Access (Optional)")
                     }
                 }
             }
@@ -2291,16 +2307,16 @@ fun SystemPermissionsPage(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Optional. Uses UID 2000 to record crystal-clear audio from both caller and receiver on Android 15–17. If not configured, the app seamlessly falls back to standard microphone capture.",
+                    text = "Optional. Standard Mode (Mic capture) is currently active and ready out-of-the-box. Shizuku elevates capture to UID 2000 for crystal-clear internal caller & receiver audio without root.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StatusItem(
-                    title = "Shizuku Service",
+                    title = "Capture Mode",
                     isOk = isShizukuGranted,
-                    okText = "Connected & Active (UID 2000)",
-                    errorText = if (isShizukuAvailable) "Permission Not Granted" else "Not Running"
+                    okText = "Enhanced Dual-Side (UID 2000)",
+                    errorText = "Standard Mic Mode (Ready)"
                 )
                 if (!isShizukuGranted) {
                     Spacer(modifier = Modifier.height(10.dp))
@@ -2309,13 +2325,13 @@ fun SystemPermissionsPage(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Connect Shizuku")
+                        Text("Connect Shizuku (Optional)")
                     }
                 }
             }
         }
 
-        // Card 3: Samsung MARs Battery Optimization
+        // Card 3: Universal Background Battery Protection
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -2326,17 +2342,17 @@ fun SystemPermissionsPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.BatteryAlert, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text("Samsung MARs Background Freeze", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Background Battery Protection", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Samsung One UI aggressively freezes background processes (FreecessController). Excluding the app from battery optimization ensures background standby stability.",
+                    text = "Android battery savers (Poco/Xiaomi MIUI, HyperOS, Samsung, etc.) aggressively sleep or kill background monitors. Excluding the app keeps standby monitoring alive 24/7.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 StatusItem(
-                    title = "Protection State",
+                    title = "Battery Protection",
                     isOk = isBatteryOptimizedIgnored,
                     okText = "Unrestricted (Safe)",
                     errorText = "Restricted (May Be Frozen)"
@@ -2571,7 +2587,7 @@ fun DocsPage(
         DocsSectionCard(
             icon = Icons.Default.Notifications,
             title = "3. How to Hide the Standby Notification (Pro-Tip)",
-            body = "Android 14+ requires an ongoing notification for background microphone services. If you block the notification entirely, Android or Samsung may kill the recording service!\n\nTo hide the persistent notification cleanly without breaking background recording:\n1. Tap the button below to open Notification Settings.\n2. Tap 'Notification categories'.\n3. Set 'Call Recording Status' to 'Silent' or toggle it OFF.\n\nThis keeps the background service alive while keeping your status bar completely spotless!"
+            body = "Android requires an ongoing notification for background monitoring services. If you block the notification entirely, Android or OEM battery managers may kill the service!\n\nTo hide the persistent icon cleanly without stopping background recording:\n1. Tap the button below to open Notification Settings.\n2. Tap 'Notification categories'.\n3. Set 'Call Recording Status' to 'Silent' or toggle it OFF.\n\nThis keeps background monitoring alive while keeping your status bar completely spotless!"
         ) {
             Button(
                 onClick = onOpenNotificationSettings,
@@ -2584,20 +2600,20 @@ fun DocsPage(
 
         DocsSectionCard(
             icon = Icons.Default.BatteryAlert,
-            title = "4. Samsung One UI MARs & Freecess Stability",
-            body = "Samsung Galaxy devices employ aggressive power management (MARs FreecessController) that freezes background processes. Secure Call Recorder operates a persistent lightweight standby Foreground Service with microphone typing, ensuring Samsung MARs never terminates your call recording."
+            title = "4. Universal Background Battery Protection",
+            body = "Modern Android devices (Poco/Xiaomi MIUI, HyperOS, Samsung One UI, Pixel, etc.) employ aggressive power management that freezes background processes. Secure Call Recorder operates a persistent lightweight standby Foreground Service with WakeLock protection, ensuring battery managers never terminate your active call recording."
         )
 
         DocsSectionCard(
             icon = Icons.Default.Lock,
             title = "5. Sandboxed Encrypted Vault (.pvr)",
-            body = "Recordings are saved directly to internal sandbox storage (/data/user/0/.../secure_vault). Third-party file managers (Samsung My Files, Google Files) and media players cannot access this directory. Additionally, files are masked with a proprietary XOR header to prevent unauthorized extraction."
+            body = "Recordings are saved directly to internal sandbox storage (/data/user/0/.../secure_vault). Third-party file managers (Google Files, Xiaomi File Manager, Samsung My Files) and media players cannot access this directory. Additionally, files are masked with a proprietary XOR header to prevent unauthorized extraction."
         )
 
         DocsSectionCard(
             icon = Icons.Default.Info,
             title = "6. App Version & Build Information",
-            body = "• Installed Version: v$appVersionName\n• Security Architecture: 100% Offline (Zero Internet Permission)\n• Target Platform: Android 15–17 (API 35–37)\n• Device Optimization: Samsung One UI 7–9\n• License: Open Source (GitHub)"
+            body = "• Installed Version: v$appVersionName\n• Security Architecture: 100% Offline (Zero Internet Permission)\n• Target Platform: Android 11–17 (API 30–37)\n• Device Optimization: Universal (Poco, Xiaomi, Samsung, Pixel, etc.)\n• License: Open Source (GitHub)"
         )
     }
 }

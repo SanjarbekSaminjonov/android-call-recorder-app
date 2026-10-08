@@ -31,6 +31,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import rikka.shizuku.Shizuku
 import uz.developer.privaterecorder.IRecorderService
+import uz.developer.privaterecorder.R
 import uz.developer.privaterecorder.shell.ShellRecorderUserService
 import uz.developer.privaterecorder.ui.MainActivity
 import java.io.File
@@ -604,7 +605,7 @@ class RecorderControllerService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_STANDBY)
             .setContentTitle("Secure Call Recorder")
             .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_recorder_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
@@ -626,12 +627,39 @@ class RecorderControllerService : Service() {
                     startForeground(NOTIFICATION_ID_STANDBY, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 } catch (ex: Exception) {
                     Log.e(TAG, "[Controller] Failed startForeground fallback: ${ex.message}", ex)
+                    try {
+                        startForeground(NOTIFICATION_ID_STANDBY, notification)
+                    } catch (finalEx: Exception) {
+                        Log.e(TAG, "[Controller] Final startForeground fallback failed: ${finalEx.message}", finalEx)
+                    }
                 }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(NOTIFICATION_ID_STANDBY, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            val fgsType = if (isRecording) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                0
+            }
+            try {
+                if (fgsType != 0) {
+                    startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
+                } else {
+                    startForeground(NOTIFICATION_ID_STANDBY, notification)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[Controller] startForeground with type failed, falling back to standard: ${e.message}")
+                try {
+                    startForeground(NOTIFICATION_ID_STANDBY, notification)
+                } catch (finalEx: Exception) {
+                    Log.e(TAG, "[Controller] Final standard startForeground failed: ${finalEx.message}", finalEx)
+                }
+            }
         } else {
-            startForeground(NOTIFICATION_ID_STANDBY, notification)
+            try {
+                startForeground(NOTIFICATION_ID_STANDBY, notification)
+            } catch (e: Exception) {
+                Log.e(TAG, "[Controller] startForeground failed: ${e.message}", e)
+            }
         }
     }
 
@@ -662,7 +690,7 @@ class RecorderControllerService : Service() {
             val activeNotif = NotificationCompat.Builder(this, CHANNEL_RECORDING)
                 .setContentTitle("Recording Call")
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setSmallIcon(R.drawable.ic_recorder_notification)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
