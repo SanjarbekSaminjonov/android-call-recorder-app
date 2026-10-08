@@ -150,10 +150,10 @@ class ShellRecorderUserService : IRecorderService.Stub() {
 
     private fun createAudioRecordWithFallback(bufferSize: Int): AudioRecord? {
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_CALL,          // 4: Direct Modem Uplink + Downlink
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION, // 7: VoIP / Hardware Acoustic Echo Cancellation
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,   // 6: Unprocessed microphone speech
-            MediaRecorder.AudioSource.MIC                  // 1: Standard Microphone
+            MediaRecorder.AudioSource.VOICE_CALL,          // 4: Direct Modem Uplink + Downlink (when privileged)
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,   // 6: Direct speech tuning, avoids modem HAL AEC mute
+            MediaRecorder.AudioSource.MIC,                  // 1: Standard Microphone
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION  // 7: VoIP / Hardware Acoustic Echo Cancellation
         )
 
         for (source in sources) {

@@ -76,8 +76,20 @@ class RecorderControllerService : Service() {
 
         private fun resolveInputDevice(target: AudioDeviceInfo?): AudioDeviceInfo? {
             if (target == null || audioManager == null) return null
-            if (target.isSource) return target
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                // ONLY resolve to external communication headsets (Bluetooth SCO, BLE, Wired, USB)
+                // NEVER forcefully redirect when target is built-in earpiece or speaker!
+                val isExternalHeadset = target.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        target.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                        target.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                        target.type == AudioDeviceInfo.TYPE_USB_HEADSET
+
+                if (!isExternalHeadset) {
+                    return null
+                }
+
+                if (target.isSource) return target
+
                 val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
                 return inputs.firstOrNull { it.type == target.type }
                     ?: inputs.firstOrNull { it.productName == target.productName && it.isSource }
@@ -87,6 +99,29 @@ class RecorderControllerService : Service() {
                         it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
                         it.type == AudioDeviceInfo.TYPE_USB_HEADSET
                     ) }
+            }
+            return null
+        }
+
+        private fun createInitializedRecord(
+            sources: IntArray,
+            sampleRate: Int,
+            channelConfig: Int,
+            audioFormat: Int,
+            bufferSize: Int
+        ): Pair<AudioRecord, Int>? {
+            for (source in sources) {
+                try {
+                    val rec = AudioRecord(source, sampleRate, channelConfig, audioFormat, bufferSize)
+                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                        Log.i(TAG, "[NativeMic] AudioRecord initialized successfully with source: $source")
+                        return Pair(rec, source)
+                    } else {
+                        rec.release()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[NativeMic] Failed initializing source $source: ${e.message}")
+                }
             }
             return null
         }
@@ -102,32 +137,37 @@ class RecorderControllerService : Service() {
                 val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
                 val bufferSize = if (minBufferSize > 0) minBufferSize * 2 else 4096
 
-                // VOICE_COMMUNICATION is designed to link with the active telephone communication audio route
-                var record = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                // Prioritize VOICE_RECOGNITION first: direct voice stream, does NOT get silenced by cellular modem HAL
+                val candidateSources = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    intArrayOf(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        MediaRecorder.AudioSource.MIC,
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                        MediaRecorder.AudioSource.UNPROCESSED
+                    )
+                } else {
+                    intArrayOf(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        MediaRecorder.AudioSource.MIC,
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                    )
+                }
+
+                val initial = createInitializedRecord(
+                    candidateSources,
                     sampleRate,
                     channelConfig,
                     audioFormat,
                     bufferSize
                 )
 
-                if (record.state != AudioRecord.STATE_INITIALIZED) {
-                    Log.w(TAG, "[NativeMic] VOICE_COMMUNICATION failed, falling back to MIC...")
-                    record.release()
-                    record = AudioRecord(
-                        MediaRecorder.AudioSource.MIC,
-                        sampleRate,
-                        channelConfig,
-                        audioFormat,
-                        bufferSize
-                    )
-                }
-
-                if (record.state != AudioRecord.STATE_INITIALIZED) {
-                    Log.e(TAG, "[NativeMic] AudioRecord initialization failed completely.")
-                    record.release()
+                if (initial == null) {
+                    Log.e(TAG, "[NativeMic] AudioRecord initialization failed completely for all sources.")
                     return@Thread
                 }
+
+                var record: AudioRecord = initial.first
+                var activeSource: Int = initial.second
 
                 // Dynamic headset routing: Bind to active communication device (Bluetooth, Wired, USB)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -144,7 +184,7 @@ class RecorderControllerService : Service() {
                             if (newDevice != null && isRecording) {
                                 val newInput = resolveInputDevice(newDevice)
                                 if (newInput != null) {
-                                    val ok = record.setPreferredDevice(newInput)
+                                    val ok = audioRecord?.setPreferredDevice(newInput)
                                     Log.i(TAG, "[NativeMic] Communication device changed mid-call: ${newInput.productName} (success=$ok)")
                                 }
                             }
@@ -163,21 +203,68 @@ class RecorderControllerService : Service() {
 
                 try {
                     record.startRecording()
-                    Log.i(TAG, "[NativeMic] Started native mic recording to: $outputFilePath")
+                    Log.i(TAG, "[NativeMic] Started native mic recording (source=$activeSource) to: $outputFilePath")
                     val file = File(outputFilePath)
                     file.parentFile?.mkdirs()
                     val fos = FileOutputStream(file)
                     val buffer = ByteArray(bufferSize)
 
+                    var buffersChecked = 0
+                    var nonZeroDetected = false
+                    val maxBuffersToCheckForSilence = 15 // ~500ms check window
+
                     while (isRecording) {
                         val read = record.read(buffer, 0, buffer.size)
                         if (read > 0) {
+                            // Check if current source is delivering pure silence (all zeroes)
+                            if (!nonZeroDetected && buffersChecked < maxBuffersToCheckForSilence) {
+                                buffersChecked++
+                                for (i in 0 until read) {
+                                    if (buffer[i] != 0.toByte()) {
+                                        nonZeroDetected = true
+                                        break
+                                    }
+                                }
+
+                                // If still pure zeroes after check window, try switching to fallback source
+                                if (!nonZeroDetected && buffersChecked >= maxBuffersToCheckForSilence) {
+                                    val remainingSources = candidateSources.filter { it != activeSource }.toIntArray()
+                                    if (remainingSources.isNotEmpty()) {
+                                        Log.w(TAG, "[NativeMic] Active source $activeSource delivered pure digital silence! Switching to fallback source...")
+                                        try {
+                                            record.stop()
+                                            record.release()
+                                        } catch (_: Exception) {}
+
+                                        val fallback = createInitializedRecord(
+                                            remainingSources,
+                                            sampleRate,
+                                            channelConfig,
+                                            audioFormat,
+                                            bufferSize
+                                        )
+                                        if (fallback != null) {
+                                            record = fallback.first
+                                            audioRecord = record
+                                            activeSource = fallback.second
+                                            record.startRecording()
+                                            buffersChecked = 0
+                                            Log.i(TAG, "[NativeMic] Successfully switched to fallback source: $activeSource")
+                                            continue
+                                        }
+                                    }
+                                }
+                            }
+
                             fos.write(buffer, 0, read)
+                        } else if (read < 0) {
+                            Log.e(TAG, "[NativeMic] AudioRecord read error encountered: $read")
+                            break
                         }
                     }
                     fos.flush()
                     fos.close()
-                    Log.i(TAG, "[NativeMic] Stopped recording. Output: ${file.length()} bytes")
+                    Log.i(TAG, "[NativeMic] Stopped recording. Output: ${file.length()} bytes, nonZeroAudio=$nonZeroDetected")
                 } catch (e: Exception) {
                     Log.e(TAG, "[NativeMic] Error during recording: ${e.message}", e)
                 } finally {
@@ -625,11 +712,10 @@ class RecorderControllerService : Service() {
         return try {
             val notification = buildStandbyNotification(text)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val fgsType = if (isRecording) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                } else {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                }
+                // ALWAYS include FOREGROUND_SERVICE_TYPE_MICROPHONE alongside SPECIAL_USE
+                // This ensures microphone access is granted upfront while app is launched from foreground
+                // and prevents Android 14's background microphone promotion security block!
+                val fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 try {
                     startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
                     true
@@ -650,17 +736,9 @@ class RecorderControllerService : Service() {
                     }
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val fgsType = if (isRecording) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                } else {
-                    0
-                }
+                val fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 try {
-                    if (fgsType != 0) {
-                        startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
-                    } else {
-                        startForeground(NOTIFICATION_ID_STANDBY, notification)
-                    }
+                    startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
                     true
                 } catch (e: Exception) {
                     Log.w(TAG, "[Controller] startForeground with type failed, falling back to standard: ${e.message}")

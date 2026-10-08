@@ -10,6 +10,7 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.Uri
 import android.os.Build
@@ -314,6 +315,7 @@ class VaultAudioPlayer {
             }
 
             audioTrack = track
+            track.setVolume(1.0f)
             track.play()
 
             val buffer = ByteArray(minBufferSize.coerceAtLeast(4096))
@@ -1504,6 +1506,14 @@ fun SecureRecorderAppRoot(
                             isVolumeBoosted = isVolumeBoosted,
                             onPlay = { item ->
                                 currentlyPlayingPath = item.file.absolutePath
+                                try {
+                                    val audioMgr = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                                    val currentVol = audioMgr?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 1
+                                    if (currentVol == 0) {
+                                        Toast.makeText(context, "Media volume is muted. Use phone volume buttons to increase sound.", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (_: Exception) {}
+
                                 player.onProgressUpdate = { posMs, durMs ->
                                     playbackPositionMs = posMs
                                     playbackDurationMs = durMs
