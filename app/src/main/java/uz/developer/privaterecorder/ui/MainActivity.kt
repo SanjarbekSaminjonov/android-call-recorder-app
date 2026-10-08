@@ -672,6 +672,15 @@ fun SecureRecorderAppRoot(
     val lifecycleOwner = LocalLifecycleOwner.current
     val prefs = remember { context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE) }
 
+    val appVersionName = remember {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "1.0.0"
+        } catch (_: Exception) {
+            "1.0.0"
+        }
+    }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var currentScreen by remember { mutableStateOf(AppScreen.RECORDINGS) }
 
@@ -1300,11 +1309,22 @@ fun SecureRecorderAppRoot(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    Text(
-                        text = "v1.0.0 · Local Sandboxed Storage",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(Color(0xFF2E7D32), CircleShape)
+                        )
+                        Text(
+                            text = "v$appVersionName · 100% Offline Vault",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                    }
                 }
             }
         }
@@ -1580,6 +1600,7 @@ fun SecureRecorderAppRoot(
 
                     AppScreen.DOCS -> {
                         DocsPage(
+                            appVersionName = appVersionName,
                             onOpenNotificationSettings = {
                                 try {
                                     val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
@@ -2524,7 +2545,10 @@ fun SecurityPage(
 }
 
 @Composable
-fun DocsPage(onOpenNotificationSettings: () -> Unit) {
+fun DocsPage(
+    appVersionName: String,
+    onOpenNotificationSettings: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2568,6 +2592,12 @@ fun DocsPage(onOpenNotificationSettings: () -> Unit) {
             icon = Icons.Default.Lock,
             title = "5. Sandboxed Encrypted Vault (.pvr)",
             body = "Recordings are saved directly to internal sandbox storage (/data/user/0/.../secure_vault). Third-party file managers (Samsung My Files, Google Files) and media players cannot access this directory. Additionally, files are masked with a proprietary XOR header to prevent unauthorized extraction."
+        )
+
+        DocsSectionCard(
+            icon = Icons.Default.Info,
+            title = "6. App Version & Build Information",
+            body = "• Installed Version: v$appVersionName\n• Security Architecture: 100% Offline (Zero Internet Permission)\n• Target Platform: Android 15–17 (API 35–37)\n• Device Optimization: Samsung One UI 7–9\n• License: Open Source (GitHub)"
         )
     }
 }
