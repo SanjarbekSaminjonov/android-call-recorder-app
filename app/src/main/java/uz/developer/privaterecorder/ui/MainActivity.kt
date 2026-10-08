@@ -445,10 +445,21 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+        val crashPrefs = getSharedPreferences("secure_recorder_crash_log", Context.MODE_PRIVATE)
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val stackTrace = Log.getStackTraceString(throwable)
+            Log.e(TAG, "Uncaught Exception: $stackTrace", throwable)
+            crashPrefs.edit().putString("last_crash_trace", stackTrace).commit()
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+        val initialCrashTrace = crashPrefs.getString("last_crash_trace", null)
+
         // Ensure legacy recordings are migrated into private vault
         SecureAudioVault.migrateLegacyRecordings(this)
 
         setContent {
+            var crashDialogText by remember { mutableStateOf(initialCrashTrace) }
             val systemDark = isSystemInDarkTheme()
             var isDarkMode by remember { mutableStateOf(prefs.getBoolean(KEY_THEME_DARK, systemDark)) }
 
@@ -461,6 +472,31 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    if (crashDialogText != null) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                crashDialogText = null
+                                crashPrefs.edit().remove("last_crash_trace").apply()
+                            },
+                            title = { Text("Diagnostic Error Report") },
+                            text = {
+                                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                                    Text("A previous error was caught:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(crashDialogText ?: "", fontSize = 11.sp)
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    crashDialogText = null
+                                    crashPrefs.edit().remove("last_crash_trace").apply()
+                                }) {
+                                    Text("Dismiss")
+                                }
+                            }
+                        )
+                    }
+
                     if (isAppLockEnabled && !isAppUnlocked) {
                         AppLockScreen(
                             onUnlockRequested = {
@@ -830,7 +866,8 @@ fun SecureRecorderAppRoot(
                 }
                 ContextCompat.startForegroundService(context, intent)
                 isServiceRunning = true
-            } catch (_: Exception) {
+            } catch (e: Throwable) {
+                Log.e(MainActivity.TAG, "startForegroundService exception: ${e.message}", e)
                 isServiceRunning = RecorderControllerService.isServiceRunning
             }
         } else {
@@ -839,6 +876,16 @@ fun SecureRecorderAppRoot(
     }
 
     val systemPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        coroutineScope.launch {
+            // Delay ensures Activity is fully focused on MIUI/HyperOS window manager before FGS triggers
+            delay(300)
+            checkAllStatuses()
+        }
+    }
+
+    val contactsPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
         checkAllStatuses()
@@ -1557,14 +1604,19 @@ fun SecureRecorderAppRoot(
                             onRequestPermissions = {
                                 val permissions = mutableListOf(
                                     Manifest.permission.READ_PHONE_STATE,
-                                    Manifest.permission.RECORD_AUDIO,
-                                    Manifest.permission.READ_CALL_LOG,
-                                    Manifest.permission.READ_CONTACTS
+                                    Manifest.permission.RECORD_AUDIO
                                 )
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                     permissions.add(Manifest.permission.POST_NOTIFICATIONS)
                                 }
                                 systemPermissionsLauncher.launch(permissions.toTypedArray())
+                            },
+                            onRequestContactsPermission = {
+                                val permissions = arrayOf(
+                                    Manifest.permission.READ_CONTACTS,
+                                    Manifest.permission.READ_CALL_LOG
+                                )
+                                contactsPermissionsLauncher.launch(permissions)
                             },
                             onOpenBatterySettings = {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2237,6 +2289,7 @@ fun SystemPermissionsPage(
     isBatteryOptimizedIgnored: Boolean,
     onRequestShizuku: () -> Unit,
     onRequestPermissions: () -> Unit,
+    onRequestContactsPermission: () -> Unit,
     onOpenBatterySettings: () -> Unit
 ) {
     Column(
@@ -2279,14 +2332,23 @@ fun SystemPermissionsPage(
                     okText = "Contacts Granted",
                     errorText = "Optional (Number Only)"
                 )
-                if (!hasSystemPermissions || !hasContactsPermission) {
+                if (!hasSystemPermissions) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = onRequestPermissions,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text(if (!hasSystemPermissions) "Grant Core Permissions" else "Allow Contacts Access (Optional)")
+                        Text("Grant Core Permissions")
+                    }
+                } else if (!hasContactsPermission) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onRequestContactsPermission,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Allow Contacts & Name Resolution (Optional)")
                     }
                 }
             }

@@ -10,17 +10,28 @@ android {
     defaultConfig {
         applicationId = "uz.developer.privaterecorder"
         minSdk = 31
-        targetSdk = 37
-        versionCode = 2
-        versionName = "1.0.1"
+        targetSdk = 34
+        versionCode = 3
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("release-key.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "SecureRecorder2026!"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "secure_recorder"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "SecureRecorder2026!"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -28,6 +39,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

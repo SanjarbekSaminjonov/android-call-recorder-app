@@ -258,6 +258,16 @@ class RecorderControllerService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "[Controller] RecorderControllerService onCreate. Initializing background monitoring...")
+
+        // 1. Immediately setup channels and satisfy foreground notification contract
+        setupNotificationChannels()
+        val fgsOk = startForegroundWithNotification("Standby: Monitoring calls...")
+        if (!fgsOk) {
+            Log.e(TAG, "[Controller] startForeground failed in onCreate. Stopping self to avoid system kill.")
+            stopSelf()
+            return
+        }
+
         isServiceRunning = true
 
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -267,14 +277,6 @@ class RecorderControllerService : Service() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
         wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SecureRecorder:RecordingWakeLock")?.apply {
             setReferenceCounted(false)
-        }
-
-        try {
-            setupNotificationChannels()
-            startForegroundWithNotification("Standby: Monitoring calls...")
-            Log.i(TAG, "[Controller] Foreground Service started in standby mode.")
-        } catch (e: Exception) {
-            Log.e(TAG, "[Controller] Failed to startForeground: ${e.message}", e)
         }
 
         // Recover any unfinalized recordings from previous sudden reboots or crashes
@@ -298,6 +300,16 @@ class RecorderControllerService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
+        }
+
+        // Ensure startForeground is satisfied on onStartCommand as required by Android 14+
+        if (!isServiceRunning) {
+            val ok = startForegroundWithNotification("Standby: Monitoring calls...")
+            if (!ok) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            isServiceRunning = true
         }
 
         return START_STICKY
@@ -348,11 +360,9 @@ class RecorderControllerService : Service() {
                 Log.i(TAG, "[Controller] CALL_STATE_IDLE detected! Call terminated.")
                 if (isRecordingSessionActive) {
                     finishRecordingSession()
+                    dismissActiveRecordingNotification()
+                    startForegroundWithNotification("Standby: Monitoring calls...", isRecording = false)
                 }
-
-                // Immediately dismiss the active call alert and return to silent standby
-                dismissActiveRecordingNotification()
-                startForegroundWithNotification("Standby: Monitoring calls...", isRecording = false)
             }
             TelephonyManager.CALL_STATE_RINGING -> {
                 Log.i(TAG, "[Controller] CALL_STATE_RINGING detected. Incoming call ringing...")
@@ -611,55 +621,69 @@ class RecorderControllerService : Service() {
             .build()
     }
 
-    private fun startForegroundWithNotification(text: String, isRecording: Boolean = false) {
-        val notification = buildStandbyNotification(text)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val fgsType = if (isRecording) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            }
-            try {
-                startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
-            } catch (e: Exception) {
-                Log.w(TAG, "[Controller] FGS type ($fgsType) start failed, falling back to SPECIAL_USE: ${e.message}")
+    private fun startForegroundWithNotification(text: String, isRecording: Boolean = false): Boolean {
+        return try {
+            val notification = buildStandbyNotification(text)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val fgsType = if (isRecording) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                }
                 try {
-                    startForeground(NOTIFICATION_ID_STANDBY, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-                } catch (ex: Exception) {
-                    Log.e(TAG, "[Controller] Failed startForeground fallback: ${ex.message}", ex)
+                    startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "[Controller] FGS type ($fgsType) start failed, falling back to SPECIAL_USE: ${e.message}")
                     try {
-                        startForeground(NOTIFICATION_ID_STANDBY, notification)
-                    } catch (finalEx: Exception) {
-                        Log.e(TAG, "[Controller] Final startForeground fallback failed: ${finalEx.message}", finalEx)
+                        startForeground(NOTIFICATION_ID_STANDBY, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                        true
+                    } catch (ex: Exception) {
+                        Log.e(TAG, "[Controller] Failed startForeground fallback: ${ex.message}", ex)
+                        try {
+                            startForeground(NOTIFICATION_ID_STANDBY, notification)
+                            true
+                        } catch (finalEx: Exception) {
+                            Log.e(TAG, "[Controller] Final startForeground fallback failed: ${finalEx.message}", finalEx)
+                            false
+                        }
                     }
                 }
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val fgsType = if (isRecording) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            } else {
-                0
-            }
-            try {
-                if (fgsType != 0) {
-                    startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val fgsType = if (isRecording) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 } else {
-                    startForeground(NOTIFICATION_ID_STANDBY, notification)
+                    0
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "[Controller] startForeground with type failed, falling back to standard: ${e.message}")
+                try {
+                    if (fgsType != 0) {
+                        startForeground(NOTIFICATION_ID_STANDBY, notification, fgsType)
+                    } else {
+                        startForeground(NOTIFICATION_ID_STANDBY, notification)
+                    }
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "[Controller] startForeground with type failed, falling back to standard: ${e.message}")
+                    try {
+                        startForeground(NOTIFICATION_ID_STANDBY, notification)
+                        true
+                    } catch (finalEx: Exception) {
+                        Log.e(TAG, "[Controller] Final standard startForeground failed: ${finalEx.message}", finalEx)
+                        false
+                    }
+                }
+            } else {
                 try {
                     startForeground(NOTIFICATION_ID_STANDBY, notification)
-                } catch (finalEx: Exception) {
-                    Log.e(TAG, "[Controller] Final standard startForeground failed: ${finalEx.message}", finalEx)
+                    true
+                } catch (e: Exception) {
+                    Log.e(TAG, "[Controller] startForeground failed: ${e.message}", e)
+                    false
                 }
             }
-        } else {
-            try {
-                startForeground(NOTIFICATION_ID_STANDBY, notification)
-            } catch (e: Exception) {
-                Log.e(TAG, "[Controller] startForeground failed: ${e.message}", e)
-            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "[Controller] Unexpected startForeground exception: ${e.message}", e)
+            false
         }
     }
 
