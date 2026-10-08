@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Secure Call Recorder</string>
+    <string name="channel_name">Call Recording Status</string>
+    <string name="channel_desc">Persistent standby monitoring and active call recording</string>
+</resources>

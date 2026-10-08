@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-files-path name="recordings" path="Recordings" />
+    <cache-path name="cache_audio" path="audio_exports" />
+    <cache-path name="cache_root" path="." />
+</paths>
