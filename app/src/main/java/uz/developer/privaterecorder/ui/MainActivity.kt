@@ -2073,18 +2073,8 @@ fun RecordingsPage(
                                                     maxLines = 1
                                                 )
                                             }
-                                            val dirBadge = when (item.direction) {
-                                                CallDirection.INCOMING -> "↙ Kiruvchi"
-                                                CallDirection.OUTGOING -> "↗ Chiquvchi"
-                                                else -> null
-                                            }
                                             val durBadge = "${item.durationSeconds} sek (${item.durationFormatted})"
-                                            val detailsText = listOfNotNull(
-                                                dirBadge,
-                                                durBadge,
-                                                item.dateFormatted,
-                                                item.sizeFormatted
-                                            ).joinToString(" • ")
+                                            val detailsText = "${item.dateFormatted} • $durBadge • ${item.sizeFormatted}"
 
                                             Text(
                                                 text = detailsText,
