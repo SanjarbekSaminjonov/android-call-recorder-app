@@ -219,6 +219,8 @@ class RecorderControllerService : Service() {
 
     private lateinit var nativeMicRecorder: NativeMicRecorder
     private var isRecordingSessionActive = false
+    @Volatile private var isIncomingCall = false
+    @Volatile private var activeCallDirection: String = "UNKNOWN"
     private var isBoundToShizuku = false
     private var recorderService: IRecorderService? = null
 
@@ -346,13 +348,19 @@ class RecorderControllerService : Service() {
 
     private fun handleCallState(state: Int) {
         when (state) {
+            TelephonyManager.CALL_STATE_RINGING -> {
+                Log.i(TAG, "[Controller] CALL_STATE_RINGING detected. Incoming call ringing...")
+                isIncomingCall = true
+            }
             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                Log.i(TAG, "[Controller] CALL_STATE_OFFHOOK detected! Call connected. Activating recording...")
+                activeCallDirection = if (isIncomingCall) "IN" else "OUT"
+                Log.i(TAG, "[Controller] CALL_STATE_OFFHOOK detected ($activeCallDirection)! Call connected. Activating recording...")
                 isRecordingSessionActive = true
 
                 // Promote foreground service type and update notification
-                startForegroundWithNotification("Recording call in progress...", isRecording = true)
-                showActiveRecordingNotification("Recording active phone call in progress...")
+                val callTypeDesc = if (activeCallDirection == "IN") "Incoming call" else "Outgoing call"
+                startForegroundWithNotification("Recording $callTypeDesc in progress...", isRecording = true)
+                showActiveRecordingNotification("Recording $callTypeDesc in progress...")
 
                 beginRecordingSession()
             }
@@ -363,9 +371,8 @@ class RecorderControllerService : Service() {
                     dismissActiveRecordingNotification()
                     startForegroundWithNotification("Standby: Monitoring calls...", isRecording = false)
                 }
-            }
-            TelephonyManager.CALL_STATE_RINGING -> {
-                Log.i(TAG, "[Controller] CALL_STATE_RINGING detected. Incoming call ringing...")
+                isIncomingCall = false
+                activeCallDirection = "UNKNOWN"
             }
         }
     }
@@ -434,7 +441,8 @@ class RecorderControllerService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "[Controller] Error invoking stopRecording: ${e.message}", e)
         } finally {
-            vaultFileWithContactInfo(fileToRename)
+            val directionToVault = activeCallDirection
+            vaultFileWithContactInfo(fileToRename, directionToVault)
 
             try {
                 val broadcastIntent = Intent(ACTION_RECORDING_COMPLETED).setPackage(packageName)
@@ -446,7 +454,7 @@ class RecorderControllerService : Service() {
         }
     }
 
-    private fun vaultFileWithContactInfo(originalFile: File?) {
+    private fun vaultFileWithContactInfo(originalFile: File?, realtimeDirection: String = "UNKNOWN") {
         if (originalFile == null || !originalFile.exists() || originalFile.length() == 0L) {
             return
         }
@@ -462,7 +470,19 @@ class RecorderControllerService : Service() {
             // Small pause (400ms) to ensure Telecom finished writing latest CallLog row
             Thread.sleep(400)
 
-            val (number, cachedName) = getLatestCallInfo()
+            val callLogInfo = getLatestCallInfo()
+            val number = callLogInfo.number
+            val cachedName = callLogInfo.name
+            val callType = callLogInfo.type
+
+            val resolvedDirection = when {
+                callType == CallLog.Calls.INCOMING_TYPE -> "IN"
+                callType == CallLog.Calls.OUTGOING_TYPE -> "OUT"
+                realtimeDirection == "IN" -> "IN"
+                realtimeDirection == "OUT" -> "OUT"
+                else -> "UNKNOWN"
+            }
+
             val contactName = if (!cachedName.isNullOrBlank()) {
                 cachedName
             } else if (!number.isNullOrBlank()) {
@@ -472,50 +492,56 @@ class RecorderControllerService : Service() {
             }
 
             val baseName = originalFile.nameWithoutExtension
+            val dirTag = if (resolvedDirection != "UNKNOWN") "_${resolvedDirection}" else ""
 
             val newBaseName = when {
                 !contactName.isNullOrBlank() && !number.isNullOrBlank() -> {
                     val cleanName = contactName.replace("[^a-zA-Z0-9а-яА-ЯёЁ_\\- ]".toRegex(), "").trim().replace(" ", "_")
                     val cleanNumber = number.replace("[^0-9+]".toRegex(), "")
-                    "${baseName}_${cleanName}_${cleanNumber}"
+                    "${baseName}${dirTag}_${cleanName}_${cleanNumber}"
                 }
                 !number.isNullOrBlank() -> {
                     val cleanNumber = number.replace("[^0-9+]".toRegex(), "")
-                    "${baseName}_${cleanNumber}"
+                    "${baseName}${dirTag}_${cleanNumber}"
                 }
                 !contactName.isNullOrBlank() -> {
                     val cleanName = contactName.replace("[^a-zA-Z0-9а-яА-ЯёЁ_\\- ]".toRegex(), "").trim().replace(" ", "_")
-                    "${baseName}_${cleanName}"
+                    "${baseName}${dirTag}_${cleanName}"
                 }
+                dirTag.isNotEmpty() -> "${baseName}${dirTag}"
                 else -> baseName
             }
 
             val securedFile = uz.developer.privaterecorder.util.SecureAudioVault.secureAndVaultFile(this, originalFile, newBaseName)
-            Log.i(TAG, "[Controller] Vaulted recording: ${securedFile?.absolutePath}")
+            Log.i(TAG, "[Controller] Vaulted recording ($resolvedDirection): ${securedFile?.absolutePath}")
             uz.developer.privaterecorder.util.SecureAudioVault.performAutoRetentionCleanup(this)
         } catch (e: Exception) {
             Log.e(TAG, "[Controller] Error vaulting file with contact info: ${e.message}", e)
         }
     }
 
-    private fun getLatestCallInfo(): Pair<String?, String?> {
+    private data class CallLogInfo(val number: String?, val name: String?, val type: Int?)
+
+    private fun getLatestCallInfo(): CallLogInfo {
         try {
-            val projection = arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME)
+            val projection = arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME, CallLog.Calls.TYPE)
             val sortOrder = "${CallLog.Calls.DATE} DESC"
             contentResolver.query(CallLog.Calls.CONTENT_URI, projection, null, null, sortOrder)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val numberIdx = cursor.getColumnIndex(CallLog.Calls.NUMBER)
                     val nameIdx = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                    val typeIdx = cursor.getColumnIndex(CallLog.Calls.TYPE)
                     val number = if (numberIdx != -1) cursor.getString(numberIdx) else null
                     val name = if (nameIdx != -1) cursor.getString(nameIdx) else null
-                    Log.i(TAG, "[Controller] Latest CallLog resolved: number=$number, name=$name")
-                    return Pair(number, name)
+                    val type = if (typeIdx != -1) cursor.getInt(typeIdx) else null
+                    Log.i(TAG, "[Controller] Latest CallLog resolved: number=$number, name=$name, type=$type")
+                    return CallLogInfo(number, name, type)
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "[Controller] CallLog query error: ${e.message}", e)
         }
-        return Pair(null, null)
+        return CallLogInfo(null, null, null)
     }
 
     private fun lookupContactName(phoneNumber: String): String? {

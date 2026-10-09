@@ -48,6 +48,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -175,6 +177,12 @@ enum class RecordingSortOption(val label: String) {
     SIZE_ASC("Smallest size")
 }
 
+enum class CallDirection {
+    INCOMING,
+    OUTGOING,
+    UNKNOWN
+}
+
 data class RecordingItem(
     val file: File,
     val name: String,
@@ -183,9 +191,11 @@ data class RecordingItem(
     val dateFormatted: String,
     val durationMs: Long,
     val durationFormatted: String,
+    val durationSeconds: Long,
     val sizeBytes: Long,
     val sizeFormatted: String,
     val lastModified: Long,
+    val direction: CallDirection = CallDirection.UNKNOWN,
     val isStarred: Boolean = false,
     val note: String? = null
 )
@@ -772,21 +782,47 @@ fun SecureRecorderAppRoot(
     var noteInputText by remember { mutableStateOf("") }
     var showOnboardingDialog by remember { mutableStateOf(isFirstLaunch) }
 
-    fun parseRecordingInfo(fileName: String): Pair<String, String> {
+    data class ParsedRecordingInfo(
+        val title: String,
+        val subtitle: String,
+        val direction: CallDirection
+    )
+
+    fun parseRecordingInfo(fileName: String): ParsedRecordingInfo {
         val clean = fileName.removeSuffix(".pvr").removeSuffix(".pcm")
         val parts = clean.split("_")
+        if (parts.size >= 4 && (parts[3].equals("IN", ignoreCase = true) || parts[3].equals("OUT", ignoreCase = true))) {
+            val direction = if (parts[3].equals("IN", ignoreCase = true)) CallDirection.INCOMING else CallDirection.OUTGOING
+            val remaining = parts.drop(4)
+            return when {
+                remaining.size >= 2 -> {
+                    val number = remaining.last()
+                    val name = remaining.subList(0, remaining.size - 1).joinToString(" ")
+                    ParsedRecordingInfo(name, number, direction)
+                }
+                remaining.size == 1 -> {
+                    val number = remaining[0]
+                    ParsedRecordingInfo(number, "", direction)
+                }
+                else -> {
+                    val defaultTitle = if (direction == CallDirection.INCOMING) "Incoming Call" else "Outgoing Call"
+                    ParsedRecordingInfo(defaultTitle, "", direction)
+                }
+            }
+        }
+
         return when {
             parts.size >= 5 -> {
                 val number = parts.last()
                 val name = parts.subList(3, parts.size - 1).joinToString(" ")
-                Pair(name, number)
+                ParsedRecordingInfo(name, number, CallDirection.UNKNOWN)
             }
             parts.size == 4 -> {
                 val number = parts[3]
-                Pair(number, "Unknown Number")
+                ParsedRecordingInfo(number, "", CallDirection.UNKNOWN)
             }
             else -> {
-                Pair(clean, "")
+                ParsedRecordingInfo(clean, "", CallDirection.UNKNOWN)
             }
         }
     }
@@ -811,23 +847,26 @@ fun SecureRecorderAppRoot(
                 val df = DecimalFormat("#.##")
                 "${df.format(size.toDouble() / (1024 * 1024))} MB"
             }
-            val (title, subtitle) = parseRecordingInfo(f.name)
+            val parsed = parseRecordingInfo(f.name)
             val rawAudioBytes = if (f.name.endsWith(".pvr")) (size - 64).coerceAtLeast(0) else size
             val durationMs = rawAudioBytes / 32
             val durationFormatted = formatDuration(durationMs)
+            val durationSeconds = (durationMs / 1000).coerceAtLeast(0)
             val note = prefs.getString("${MainActivity.KEY_NOTE_PREFIX}${f.name}", null)
 
             RecordingItem(
                 file = f,
                 name = f.name,
-                title = title,
-                subtitle = subtitle,
+                title = parsed.title,
+                subtitle = parsed.subtitle,
                 dateFormatted = dateFormat.format(Date(f.lastModified())),
                 durationMs = durationMs,
                 durationFormatted = durationFormatted,
+                durationSeconds = durationSeconds,
                 sizeBytes = size,
                 sizeFormatted = formattedSize,
                 lastModified = f.lastModified(),
+                direction = parsed.direction,
                 isStarred = favoriteSet.contains(f.name),
                 note = note
             )
@@ -969,6 +1008,8 @@ fun SecureRecorderAppRoot(
                         item.title.lowercase().contains(query) ||
                         item.subtitle.lowercase().contains(query) ||
                         item.name.lowercase().contains(query) ||
+                        (item.direction == CallDirection.INCOMING && (query.contains("kiruvchi") || query == "in" || query.contains("incom"))) ||
+                        (item.direction == CallDirection.OUTGOING && (query.contains("chiquvchi") || query == "out")) ||
                         (item.note?.lowercase()?.contains(query) == true)
 
                 matchesDate && matchesQuery
@@ -1974,19 +2015,41 @@ fun RecordingsPage(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.weight(1f)
                                     ) {
+                                        val callGreen = Color(0xFF4CAF50)
+                                        val callBlue = Color(0xFF2196F3)
+
+                                        val iconBg = if (isPlaying) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else when (item.direction) {
+                                            CallDirection.INCOMING -> callGreen.copy(alpha = 0.18f)
+                                            CallDirection.OUTGOING -> callBlue.copy(alpha = 0.18f)
+                                            else -> MaterialTheme.colorScheme.primaryContainer
+                                        }
+
+                                        val iconTint = if (isPlaying) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else when (item.direction) {
+                                            CallDirection.INCOMING -> callGreen
+                                            CallDirection.OUTGOING -> callBlue
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
+
+                                        val iconVector = when (item.direction) {
+                                            CallDirection.INCOMING -> Icons.AutoMirrored.Filled.CallReceived
+                                            CallDirection.OUTGOING -> Icons.AutoMirrored.Filled.CallMade
+                                            else -> if (item.subtitle.isNotBlank() && item.subtitle != "Unknown Number") Icons.Default.Call else Icons.Default.Mic
+                                        }
+
                                         Box(
                                             modifier = Modifier
                                                 .size(38.dp)
-                                                .background(
-                                                    if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
-                                                    CircleShape
-                                                ),
+                                                .background(iconBg, CircleShape),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
-                                                imageVector = if (item.subtitle.isNotBlank() && item.subtitle != "Unknown Number") Icons.Default.Call else Icons.Default.Mic,
+                                                imageVector = iconVector,
                                                 contentDescription = null,
-                                                tint = if (isPlaying) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                                tint = iconTint,
                                                 modifier = Modifier.size(19.dp)
                                             )
                                         }
@@ -2010,8 +2073,21 @@ fun RecordingsPage(
                                                     maxLines = 1
                                                 )
                                             }
+                                            val dirBadge = when (item.direction) {
+                                                CallDirection.INCOMING -> "↙ Kiruvchi"
+                                                CallDirection.OUTGOING -> "↗ Chiquvchi"
+                                                else -> null
+                                            }
+                                            val durBadge = "${item.durationSeconds} sek (${item.durationFormatted})"
+                                            val detailsText = listOfNotNull(
+                                                dirBadge,
+                                                durBadge,
+                                                item.dateFormatted,
+                                                item.sizeFormatted
+                                            ).joinToString(" • ")
+
                                             Text(
-                                                text = "${item.dateFormatted} • ${item.durationFormatted} • ${item.sizeFormatted}",
+                                                text = detailsText,
                                                 fontSize = 11.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 maxLines = 1
